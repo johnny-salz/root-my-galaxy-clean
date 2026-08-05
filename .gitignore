@@ -1,0 +1,7 @@
+/.deps/
+/.refs/
+/.build/
+/out/
+/exploit/out/
+/target-input/
+/debug/

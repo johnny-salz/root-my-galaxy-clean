@@ -1,0 +1,42 @@
+diff --git a/include/uapi/linux/ioctl.h b/include/uapi/linux/ioctl.h
+--- a/include/uapi/linux/ioctl.h
++++ b/include/uapi/linux/ioctl.h
+@@ -1,8 +1,8 @@
+ /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+-#ifndef _LINUX_IOCTL_H
+-#define _LINUX_IOCTL_H
++#ifndef _UAPI_LINUX_IOCTL_H
++#define _UAPI_LINUX_IOCTL_H
+ 
+ #include <asm/ioctl.h>
+ 
+-#endif /* _LINUX_IOCTL_H */
++#endif /* _UAPI_LINUX_IOCTL_H */
+ 
+diff --git a/include/linux/ioctl.h b/include/linux/ioctl.h
+new file mode 100644
+--- /dev/null
++++ b/include/linux/ioctl.h
+@@ -0,0 +1,9 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _LINUX_IOCTL_H
++#define _LINUX_IOCTL_H
++
++#include <uapi/linux/ioctl.h>
++
++extern unsigned int __invalid_size_argument_for_IOC;
++
++#endif
+diff --git a/include/linux/netdevice.h b/include/linux/netdevice.h
+--- a/include/linux/netdevice.h
++++ b/include/linux/netdevice.h
+@@ -22,8 +22,9 @@
+ #define _LINUX_NETDEVICE_H
+ 
+ #include <linux/timer.h>
+ #include <linux/bug.h>
++#include <linux/ioctl.h>
+ #include <linux/delay.h>
+ #include <linux/atomic.h>
+ #include <linux/prefetch.h>
+ #include <asm/cache.h>

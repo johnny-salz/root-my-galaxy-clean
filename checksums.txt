@@ -1,0 +1,10 @@
+# Samsung Open Source wrapper; manually downloaded by the operator.
+8f421827b768a17560716ae886afa2130c68154e9c8ef7da62b97ba50f133c2d  SM-A536B.zip
+# Inner Samsung source package from that wrapper.
+c650861e5fdb9c9a38655586cbbfd9e834c1d45e2f71689f09601fb2fe64100e  SM-A536B_16_Opensource.zip
+113b6998cd3dd26d2317c9683f7bbb9909211e9025402fa357f1add9e38a45c8  Kernel.tar.gz
+f223b37d7420b19584083ff70c555982e8835e66b02a7a59c46ecaefd7536ef2  clang-r416183b.tar.gz
+ffd02ec8f681613bf9e63c755bbdbacfacc43863aff0d99c71de980098ee4110  vendor/root-my-galaxy-payloads/kernelsu/patches/KernelSU-v3.2.5-samsung-kdp-rkp-defex.patch
+d9d9dc8fe8c60a2e2dd6925c947f7b1455e144072409761d308598586d2992ea  vendor/root-my-galaxy-payloads/src/su_daemon.c
+56788a54ac46c16c12e687b54420d7891f3f52e974c3ba5140f7833532a3bcc2  out/kernelsu.ko
+72763362de5dc5cbc75c8b3ebb5b6599e704ec3999918b62751777e8195dbda4  out/ksud

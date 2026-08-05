@@ -1,0 +1,21 @@
+diff --git a/su_daemon.c b/su_daemon.c
+--- a/su_daemon.c
++++ b/su_daemon.c
+@@ -25,7 +25,7 @@
+ #define BOOTSTRAP_SOCK_PATH "/data/local/tmp/temp_su.sock"
+ #define HOLD_READY_SOCKET "cve43499_roothold"
+ #define SH_PATH "/system/bin/sh"
+-#define KSU_LOADER_PATH "/data/local/tmp/ksud-s25u-kdp"
++#define KSU_LOADER_PATH "/data/local/tmp/rmg-ksud"
+ #define LOGCAT_PATH "/system/bin/logcat"
+ 
+ static uid_t allowed_client_uid = 2000;
+@@ -479,7 +479,7 @@
+       /* Let the downloaded target-specific ksud select its embedded module
+        * from the running kernel.  Hard-coding android15-6.6 made the shared
+        * loader path unusable for exact 6.1 payloads such as E2S. */
+       execl(LOGCAT_PATH, "logcat", "late-load", "--package-name",
+-            "me.weishu.kernelsu", (char *)NULL);
++            "me.weishu.kernelsu", "--allow-shell", (char *)NULL);
+       dprintf(STDERR_FILENO, "late-load: exec: %s\n", strerror(errno));
+       _exit(12);
