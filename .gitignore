@@ -5,3 +5,6 @@
 /exploit/out/
 /target-input/
 /debug/
+/artifacts/
+*.log
+/exploit/page-leak-probe
