@@ -2130,3 +2130,48 @@ The tested payload has SHA-256:
 
 The model-specific payload is proposed upstream in
 [Root-My-Galaxy-Payloads PR #168](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/pull/168).
+# rt_sigreturn FPSIMD writer branch (2026-08-08)
+
+- Worktree: `root-my-galaxy-clean-fpsimd`, branch
+  `agent/rt-sigreturn-fpsimd-poc`.
+- Exact GZG3 disassembly was rechecked. The stale `rt_mutex_waiter` is at
+  syscall-entry SP `- 0x1e0`; `restore_fpsimd_context` copies `0x200` bytes
+  into a local buffer at syscall-entry SP `- 0x2e0`. The waiter therefore
+  starts at FPSIMD `vregs + 0x100` and its full `0x50` bytes are covered.
+- Added a separate `fpsimd-writer-poc`; production `poc.c` and clean chain are
+  unchanged. `frame` is the safe writer/oracle control. `ghostlock` creates
+  the stale waiter, writes through `rt_sigreturn`, stops before
+  `sched_setattr`, and stays alive.
+- A kprobe at `restore_fpsimd_context+0x338` is rejected because that point is
+  the function return instruction. The accepted live oracle is a kretprobe on
+  `__arch_copy_from_user`, filtered to `fpsimd-poc`, reading kernel
+  `SP+0x100..SP+0x148` after the copy.
+- Root must invoke pushed scripts as `/system/bin/sh SCRIPT`. Directly
+  executing a root-owned command from `/data/local/tmp` is killed by Samsung
+  DEFEX and logs `Safeplace violation`; this is unrelated to kprobe or FPSIMD.
+- Safe `frame` live test passed: `restore_fpsimd_context+0x338` returned from
+  `__arch_copy_from_user` with `ret=0`, and kernel `SP+0x100..+0x148` contained
+  the exact ten-qword marker.
+- Full `ghostlock` live test passed on boot
+  `22f64510-d8c8-4a96-b7ca-bae695310f8c`. Probe facts:
+  `rt_mutex_waiter=0xffffffc03047bc60`, restore SP
+  `0xffffffc03047bb60`, so `SP+0x100` equals the waiter exactly. The same
+  event contained markers `0x465053494d440000..009`.
+- The full PoC never called `sched_setattr`; it stayed alive after the copy.
+  The host then deliberately used `adb reboot` to remove the stale waiter.
+  There was no spontaneous reboot during capture.
+- After replacing cross-thread signal flags with lock-free C11 atomics, the
+  rebuilt binary (`d795ccdb4ae3c74a67d7832c0411ebbf87a279730f422eb7e0d88bfd2e53f684`)
+  passed safe `frame` mode again on the next boot.
+- `scripts/build-exploit.sh` now applies the root-helper patch with `patch`
+  after a dry run. WSL otherwise follows the Windows worktree `.git` pointer
+  and fails before compilation; the patch does not need repository discovery.
+- Probe capture now uses a dedicated tracefs instance `rmg_fpsimd`; it no
+  longer clears or stops global tracing. Cleanup disables and removes both
+  dynamic events and then removes the instance, so the check leaves no trace
+  controls behind.
+- `scripts/run-fpsimd-frame.ps1` passed end to end on the next boot with the
+  stable tracefs/perf root already active: exact target gate, build, push,
+  host/device SHA-256, isolated probe capture, marker gate, and cleanup. After
+  the run, no `rmg_fpsimd` instance or dynamic probe remained; root stayed
+  active.
