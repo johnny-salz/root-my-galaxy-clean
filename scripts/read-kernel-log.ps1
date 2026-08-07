@@ -8,29 +8,49 @@ $ErrorActionPreference = "Stop"
 $adb = (Get-Command adb -ErrorAction Stop).Source
 $device = if ($Serial) { @("-s", $Serial) } else { @() }
 
-function Invoke-Root([string]$command) {
-    $remote = "$RootHelper -c `"$command`""
-    $result = & $adb @device shell $remote 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "root log read failed: $($result -join "`n")" }
+function Invoke-Adb {
+    $savedErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $result = & $adb @device @args 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorAction
+    }
+    if ($exitCode -ne 0) { throw "adb $($args -join ' ') failed ($exitCode): $($result -join "`n")" }
     return ($result -join "`n")
 }
 
-$id = Invoke-Root "id"
+$id = Invoke-Adb shell $RootHelper -c id
 if ($id -notmatch "uid=0\(root\).*context=u:r:kernel:s0") {
     throw "need kernel-context root, got: $id"
 }
 
+$remoteReader = "/data/local/tmp/rmg-read-kernel-log"
+$localReader = [IO.Path]::GetTempFileName()
+$reader = @"
+#!/system/bin/sh
+set -u
+echo id
+id
+echo bootreason
+getprop ro.boot.bootreason
+echo pstore
+ls -la /sys/fs/pstore
+echo dmesg
+dmesg | tail -n 300
+"@
+[IO.File]::WriteAllText($localReader, ($reader -replace "`r`n", "`n"), [Text.Encoding]::ASCII)
+
 $dir = Split-Path -Parent $OutFile
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$text = @(
-    "id"
-    $id
-    "bootreason"
-    (Invoke-Root "getprop ro.boot.bootreason")
-    "pstore"
-    (Invoke-Root "ls -la /sys/fs/pstore")
-    "dmesg"
-    (Invoke-Root "dmesg | tail -n 300")
-)
-$text -join "`n" | Set-Content -LiteralPath $OutFile -Encoding utf8
+try {
+    Invoke-Adb push $localReader $remoteReader | Out-Null
+    Invoke-Adb shell chmod 0755 $remoteReader | Out-Null
+    $text = Invoke-Adb shell $RootHelper $remoteReader
+    $text | Set-Content -LiteralPath $OutFile -Encoding utf8
+} finally {
+    Remove-Item -LiteralPath $localReader -Force
+    Invoke-Adb shell rm -f $remoteReader | Out-Null
+}
 Get-Content -LiteralPath $OutFile

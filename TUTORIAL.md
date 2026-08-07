@@ -175,15 +175,17 @@ On Windows, run the chain. Add `-Reboot` for a clean reboot if needed:
 .\scripts\root.ps1 -Artifacts C:\path\to\exploit\out
 ```
 
-The script fails if the phone facts differ. It waits for full boot, gets the new
-slide for this boot, runs one chain, and proves root with the fetched RMG root
-helper. The slide must be read again after every reboot. Zero is a valid slide.
+The script fails if the phone facts differ. It waits for full boot, finds the
+new slide itself with the CPU0 prefetch probe, finds the reclaim page with
+KernelSnitch, runs one chain, and proves root with the fetched RMG root helper.
+It does not use tracefs or perf in the normal path. The slide is found again
+after every reboot. Zero is a valid slide.
 If two runs reboot at the same exploit point, stop. Save the chain log and debug
 that point before another try.
 
-After a reboot, unlock the phone. `sys.boot_completed=1` is not enough on this
-Samsung build: user data can still be locked while services start. The runner
-waits for `sys.user.0.ce_available=true` before touching the exploit.
+Unlocking the phone is not required for the exploit. The runner waits for both
+boot-complete properties, for boot animation to stop, and then gives services
+30 seconds to settle.
 
 If `/proc/modules` already has `kernelsu`, do not run the exploit again. Use
 `adb shell /system/bin/su -c '<cmd>'`, or reboot and start one fresh chain.
@@ -195,6 +197,10 @@ While shell root is live:
 ```powershell
 .\scripts\collect-target.ps1 -OutDir C:\path\to\target-input
 ```
+
+Windows PowerShell 5.1 and PowerShell 7 are supported. The collector pushes one
+LF shell script and passes each ADB argument separately; it does not depend on
+nested Windows/Android shell quotes.
 
 Copy `target-input` once into native WSL. Then unpack the config:
 
@@ -273,13 +279,17 @@ Copy only `out/ksud` to Windows. Then:
 The script does this:
 
 1. Reboots and waits for `sys.boot_completed=1`.
-2. Waits for `sys.user.0.ce_available=true`; unlock the phone after boot.
+2. Waits for `dev.bootcomplete=1`, boot animation to stop, and a 30-second
+   settle period. No unlock is required.
 3. Checks exact model, build, and kernel.
-4. Reads this boot's slide and gets shell root.
-5. Pushes `ksud` to the loader path and to `/data/local/tmp/.ksud-stage` (the
+4. Pushes all four exploit files and verifies every device SHA-256 against the
+   local build.
+5. Finds this boot's slide with prefetch, finds the page with KernelSnitch, and
+   gets shell root without tracefs or perf.
+6. Pushes `ksud` to the loader path and to `/data/local/tmp/.ksud-stage` (the
    path KernelSU uses while installing `ksud`).
-6. Uses the RMG helper's private bind mount to run `ksud late-load --allow-shell`.
-7. Proves `kernelsu` in `/proc/modules` and proves `/system/bin/su -c id`.
+7. Uses the RMG helper's private bind mount to run `ksud late-load --allow-shell`.
+8. Proves `kernelsu` in `/proc/modules` and proves `/system/bin/su -c id`.
 
 All seven steps passed in one clean reboot test. A later log-only exploit rerun
 while the module was live ended in `reboot,shell`; that unsafe rerun is now
@@ -319,11 +329,10 @@ debugging off when done. This per-boot runner needs debugging on again after a
 reboot.
 
 The screen lock is not a second ADB password. A host key accepted earlier can
-still use ADB while the screen is locked. This runner waits for the first user
-unlock because Android then makes credential-encrypted data available; a later
-screen lock does not hide that data from a process that already has root. Root
-also does not normally unlock the Samsung bootloader, and it cannot promise
-recovery of credential-encrypted data before the first unlock.
+still use ADB while the screen is locked. This runner does not require the first
+user unlock. Credential-encrypted user files can still remain unavailable until
+Android receives the real unlock credential. Root also does not normally unlock
+the Samsung bootloader.
 
 The official v3.2.5 APK is a GitHub release asset. Do not use a random store
 repack: the module checks the Manager signature hash above. The Manager is only
@@ -345,24 +354,24 @@ not replace that driver. Reboot, unlock, and run one clean pass with the new
 
 ## Why the runner uses ADB
 
-The A53 slide leak is in `exploit/poc.c`. It opens tracefs control, enables
-`sched_blocked_reason`, and reads per-CPU `trace_pipe_raw`. The bridge also
-opens `perf_event_open` for the allocator events used by the chain. The stock
-SELinux policy permits these paths in the ADB shell domain, not in the normal
-app domain. A native app copy of the same code is not enough.
+ADB is currently the transport and launch wrapper. It pushes the exact binaries,
+checks their hashes, starts the native chain, and returns logs. It is no longer
+an oracle for discovery.
 
-The only current ways around ADB are to run the whole chain in a trusted
-privileged broker, or to build a new app-domain path that can do both the
-slide leak and the perf calls. Supplying `A53_SLIDE` removes only the tracefs
-read; it does not fix the app-domain perf denial. A slide from an old boot is
-useless because KASLR changes it. `/proc/kallsyms` is also restricted before
-root, so KernelSU's post-root resolver cannot replace this first leak. Shizuku,
-if used, still needs an external privileged start.
+The A53 slide leak in `exploit/poc.c` uses CPU0 instruction-prefetch timing. The
+page path uses KernelSnitch plus the controlled `mm_struct` SLUB drain and SKB
+reclaim. The normal chain opens neither tracefs nor `perf_event_open` and takes
+no external slide or page address. Tracefs is available only through explicit
+`A536_SLIDE_CALIBRATE_TRACEFS=1` calibration.
+
+An APK/app-domain launcher is not integrated or proved yet. That is packaging
+and policy work after the native chain; it is no longer blocked on replacing
+tracefs or perf.
 
 ## What is not in this kit
 
-There is no Root-My-Galaxy APK payload for this A53 profile. The working slide
-leak needs tracefs, and the root bridge was proved in the adb shell domain.
+There is no Root-My-Galaxy APK wrapper for this A53 profile yet. The native
+tracefs/perf-free chain is proved from the ADB shell launch context.
 
 There is also no persistent boot change. `/data/adb` files can remain, but the
 module and root state are gone after reboot. Run the checked chain again.
