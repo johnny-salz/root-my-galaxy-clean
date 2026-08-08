@@ -58,6 +58,20 @@ Get-Content $profileFile | ForEach-Object {
     $target[$key] = $value
 }
 
+$localWrite = Join-Path $Artifacts "cve-2026-43499-write"
+$localBridge = Join-Path $Artifacts "cve-2026-43499-bridge"
+$localRoot = Join-Path $Artifacts "cve-2026-43499-root"
+foreach ($path in @($localWrite, $localBridge, $localRoot)) {
+    if (-not (Test-Path $path -PathType Leaf)) { throw "missing artifact: $path" }
+}
+if ($KsudPath) {
+    if (-not (Test-Path $KsudPath -PathType Leaf)) { throw "missing ksud: $KsudPath" }
+    $rootHelperText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($localRoot))
+    if (-not $rootHelperText.Contains("/data/local/tmp/rmg-ksud")) {
+        throw "stale root helper: $localRoot does not contain /data/local/tmp/rmg-ksud; rebuild with bash scripts/build-exploit.sh"
+    }
+}
+
 if ($Reboot) { Invoke-Adb reboot | Out-Null }
 Invoke-Adb wait-for-device | Out-Null
 $deadline = (Get-Date).AddMinutes(6)
@@ -87,13 +101,6 @@ $modules = Invoke-Adb shell cat /proc/modules
 if ($modules -match "(?m)^kernelsu ") {
     $suState = Invoke-Adb shell "/system/bin/su -c id"
     throw "KernelSU is already live: $suState. Reboot before running the exploit again."
-}
-
-$localWrite = Join-Path $Artifacts "cve-2026-43499-write"
-$localBridge = Join-Path $Artifacts "cve-2026-43499-bridge"
-$localRoot = Join-Path $Artifacts "cve-2026-43499-root"
-foreach ($path in @($localWrite, $localBridge, $localRoot)) {
-    if (-not (Test-Path $path -PathType Leaf)) { throw "missing artifact: $path" }
 }
 
 $remoteWrite = "/data/local/tmp/rmg-write"
@@ -137,7 +144,6 @@ if ($actualCacheAlloc -ne $target.KMEM_CACHE_ALLOC_ID) { throw "wrong cache trac
 Write-Host "shell root ok: $id"
 
 if (-not $KsudPath) { return }
-if (-not (Test-Path $KsudPath -PathType Leaf)) { throw "missing ksud: $KsudPath" }
 $remoteKsud = "/data/local/tmp/rmg-ksud"
 Invoke-Adb push $KsudPath $remoteKsud | Out-Null
 Invoke-Adb shell chmod 755 $remoteKsud | Out-Null
