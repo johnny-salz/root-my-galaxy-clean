@@ -28,6 +28,9 @@ function Invoke-Adb {
         $ErrorActionPreference = $savedErrorAction
     }
     $text = $result -join "`n"
+    if ($exitCode -ne 0 -and $args.Count -eq 1 -and $args[0] -eq "reboot" -and $text -match "(?m)^error: closed\s*$") {
+        return $text
+    }
     if ($exitCode -ne 0 -and $text -match "daemon not running|cannot connect to daemon|failed to start daemon|could not read ok from ADB Server|no devices|offline") {
         Restart-Adb
         $savedErrorAction = $ErrorActionPreference
@@ -39,7 +42,7 @@ function Invoke-Adb {
             $ErrorActionPreference = $savedErrorAction
         }
     }
-    if ($exitCode -ne 0) { throw "adb failed: $($result -join "`n")" }
+    if ($exitCode -ne 0) { throw "adb $($args -join ' ') failed ($exitCode): $($result -join "`n")" }
     return ($result -join "`n")
 }
 
